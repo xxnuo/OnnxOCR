@@ -1,9 +1,10 @@
-import numpy as np
-import cv2
 import argparse
 import math
-from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
+
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 # 获取当前文件所在的目录
 module_dir = Path(__file__).resolve().parent
@@ -119,7 +120,7 @@ def text_visual(
     img_h=400,
     img_w=600,
     threshold=0.0,
-    font_path=str(module_dir / "fonts/simfang.ttf"),
+    font_path=str(module_dir / "fonts/default.ttf"),
 ):
     """
     create new blank img and draw txt on it
@@ -132,9 +133,9 @@ def text_visual(
     return(array):
     """
     if scores is not None:
-        assert len(texts) == len(
-            scores
-        ), "The number of txts and corresponding scores must match"
+        assert len(texts) == len(scores), (
+            "The number of txts and corresponding scores must match"
+        )
 
     def create_blank_img():
         blank_img = np.ones(shape=[img_h, img_w], dtype=np.int8) * 255
@@ -198,7 +199,7 @@ def draw_ocr(
     txts=None,
     scores=None,
     drop_score=0.5,
-    font_path=str(module_dir / "fonts/simfang.ttf"),
+    font_path=str(module_dir / "fonts/default.ttf"),
 ):
     """
     Visualize the results of OCR detection and recognition
@@ -321,7 +322,7 @@ def infer_args():
     )
     parser.add_argument("--use_space_char", type=str2bool, default=True)
     parser.add_argument(
-        "--vis_font_path", type=str, default=str(module_dir / "fonts/simfang.ttf")
+        "--vis_font_path", type=str, default=str(module_dir / "fonts/default.ttf")
     )
     parser.add_argument("--drop_score", type=float, default=0.5)
 
