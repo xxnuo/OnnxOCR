@@ -7,13 +7,16 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-workdir = os.getenv("ONNXOCR_WORKDIR", os.path.abspath(os.path.dirname(__file__)))
-models_dir = os.getenv(
-    "ONNXOCR_MODELS_DIR", os.path.abspath(os.path.join(workdir, "models"))
-)
-font_path = os.getenv(
-    "ONNXOCR_FONT_PATH", os.path.abspath(os.path.join(workdir, "fonts/default.ttf"))
-)
+# 使用Path统一路径处理
+CURRENT_DIR = Path(__file__).resolve().parent
+workdir = Path(os.getenv("ONNXOCR_WORKDIR", str(CURRENT_DIR)))
+models_dir = Path(os.getenv("ONNXOCR_MODELS_DIR", str(workdir / "models")))
+font_path = Path(os.getenv("ONNXOCR_FONT_PATH", str(workdir / "fonts" / "default.ttf")))
+
+# 确保路径是字符串类型，因为某些函数可能需要字符串而不是Path对象
+workdir_str = str(workdir)
+models_dir_str = str(models_dir)
+font_path_str = str(font_path)
 
 
 def get_rotate_crop_image(img, points):
@@ -126,7 +129,7 @@ def text_visual(
     img_h=400,
     img_w=600,
     threshold=0.0,
-    font_path=font_path,
+    font_path=font_path_str,
 ):
     """
     create new blank img and draw txt on it
@@ -205,7 +208,7 @@ def draw_ocr(
     txts=None,
     scores=None,
     drop_score=0.5,
-    font_path=font_path,
+    font_path=font_path_str,
 ):
     """
     Visualize the results of OCR detection and recognition
@@ -275,7 +278,7 @@ def infer_args():
     parser.add_argument(
         "--det_model_dir",
         type=str,
-        default=os.path.join(models_dir, "ppocrv5/det/det.onnx"),
+        default=str(models_dir / "ppocrv5" / "det" / "det.onnx"),
     )
     parser.add_argument("--det_limit_side_len", type=float, default=960)
     parser.add_argument("--det_limit_type", type=str, default="max")
@@ -315,7 +318,7 @@ def infer_args():
     parser.add_argument(
         "--rec_model_dir",
         type=str,
-        default=os.path.join(models_dir, "ppocrv5/rec/rec.onnx"),
+        default=str(models_dir / "ppocrv5" / "rec" / "rec.onnx"),
     )
     parser.add_argument("--rec_image_inverse", type=str2bool, default=True)
     parser.add_argument("--rec_image_shape", type=str, default="3, 48, 320")
@@ -324,10 +327,10 @@ def infer_args():
     parser.add_argument(
         "--rec_char_dict_path",
         type=str,
-        default=str(models_dir / "ppocrv5/ppocrv5_dict.txt"),
+        default=str(models_dir / "ppocrv5" / "ppocrv5_dict.txt"),
     )
     parser.add_argument("--use_space_char", type=str2bool, default=True)
-    parser.add_argument("--vis_font_path", type=str, default=font_path)
+    parser.add_argument("--vis_font_path", type=str, default=font_path_str)
     parser.add_argument("--drop_score", type=float, default=0.5)
 
     # params for e2e
@@ -341,7 +344,7 @@ def infer_args():
     parser.add_argument(
         "--e2e_char_dict_path",
         type=str,
-        default=os.path.join(models_dir, "ppocr/utils/ic15_dict.txt"),
+        default=str(models_dir / "ppocr" / "utils" / "ic15_dict.txt"),
     )
     parser.add_argument("--e2e_pgnet_valid_set", type=str, default="totaltext")
     parser.add_argument("--e2e_pgnet_mode", type=str, default="fast")
@@ -351,7 +354,7 @@ def infer_args():
     parser.add_argument(
         "--cls_model_dir",
         type=str,
-        default=os.path.join(models_dir, "ppocrv4/cls/cls.onnx"),
+        default=str(models_dir / "ppocrv4" / "cls" / "cls.onnx"),
     )
     parser.add_argument("--cls_image_shape", type=str, default="3, 48, 192")
     parser.add_argument("--label_list", type=list, default=["0", "180"])
@@ -372,13 +375,13 @@ def infer_args():
     parser.add_argument(
         "--draw_img_save_dir",
         type=str,
-        default=os.path.join(workdir, "inference_results"),
+        default=str(workdir / "inference_results"),
     )
     parser.add_argument("--save_crop_res", type=str2bool, default=False)
     parser.add_argument(
         "--crop_res_save_dir",
         type=str,
-        default=os.path.join(workdir, "output"),
+        default=str(workdir / "output"),
     )
 
     # multi-process
@@ -388,7 +391,7 @@ def infer_args():
 
     parser.add_argument("--benchmark", type=str2bool, default=False)
     parser.add_argument(
-        "--save_log_path", type=str, default=os.path.join(workdir, "log_output/")
+        "--save_log_path", type=str, default=str(workdir / "log_output")
     )
 
     parser.add_argument("--show_log", type=str2bool, default=True)
