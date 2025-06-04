@@ -4,7 +4,8 @@ import time
 
 import cv2
 
-from onnxocr.onnx_paddleocr import ONNXPaddleOcr, draw_ocr
+from onnxocr.onnx_paddleocr import ONNXPaddleOcr
+from onnxocr.utils import draw_ocr
 
 
 def parse_args():
