@@ -1,11 +1,10 @@
 import argparse
 import os
-import sys
 import time
 
 import cv2
 
-from onnxocr.onnx_paddleocr import ONNXPaddleOcr, sav2Img
+from onnxocr.onnx_paddleocr import ONNXPaddleOcr, draw_ocr
 
 
 def parse_args():
@@ -25,6 +24,50 @@ def parse_args():
         help="输出图像路径，默认为result_img/large_image_result_时间戳.jpg",
     )
     return parser.parse_args()
+
+
+def sav2Img(
+    org_img, result, name="draw_ocr.jpg", resize_for_vis=False, max_vis_width=1920
+):
+    """
+    将OCR结果可视化并保存到图像
+
+    Args:
+        org_img: 原始图像
+        result: OCR结果
+        name: 输出图像文件名
+        resize_for_vis: 是否调整图像大小以便于可视化
+        max_vis_width: 可视化图像的最大宽度
+    """
+    # 显示结果
+    import os
+
+    from PIL import Image
+
+    # 确保输出目录存在
+    output_dir = os.path.dirname(name)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+
+    result = result[0]
+    # image = Image.open(img_path).convert('RGB')
+    # 图像转BGR2RGB
+    image = org_img[:, :, ::-1]
+    boxes = [line[0] for line in result]
+    txts = [line[1][0] for line in result]
+    scores = [line[1][1] for line in result]
+
+    # 对于大图像，可以选择调整大小以便于可视化
+    im_show = draw_ocr(
+        image,
+        boxes,
+        txts,
+        scores,
+        resize_img_for_vis=resize_for_vis,
+        input_size=max_vis_width,
+    )
+    im_show = Image.fromarray(im_show)
+    im_show.save(name)
 
 
 def main():
@@ -75,8 +118,8 @@ def main():
     print(f"结果已保存到: {output_filename}")
 
     # 输出前10个识别结果示例
-    print("\n前10个识别结果示例:")
-    for i, box in enumerate(result[0][: min(10, len(result[0]))]):
+    print("\n识别结果:")
+    for i, box in enumerate(result[0][: len(result[0])]):
         print(f"{i + 1}. {box[1][0]} (置信度: {box[1][1]:.2f})")
 
 

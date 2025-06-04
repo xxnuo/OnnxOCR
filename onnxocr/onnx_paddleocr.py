@@ -29,7 +29,7 @@ class ONNXPaddleOcr(TextSystem):
         # 初始化模型
         super().__init__(params)
 
-    def process_large_image(
+    def ocr_large_image(
         self,
         img,
         max_size=2560,
@@ -260,7 +260,7 @@ class ONNXPaddleOcr(TextSystem):
         return len(common_chars) / len(set(text1) | set(text2))
 
     def ocr(self, img, det=True, rec=True, cls=True):
-        if cls == True and self.use_angle_cls == False:
+        if cls and not self.use_angle_cls:
             print(
                 "Since the angle classifier is not initialized, the angle classifier will not be uesd during the forward process"
             )
@@ -293,92 +293,3 @@ class ONNXPaddleOcr(TextSystem):
             if not rec:
                 return cls_res
             return ocr_res
-
-    def ocr_large_image(
-        self,
-        img,
-        det=True,
-        rec=True,
-        cls=True,
-        max_size=2560,
-        overlap=200,
-        memory_limit_mb=1024,
-    ):
-        """
-        处理大图像的便捷方法
-
-        Args:
-            img: 输入图像
-            det: 是否进行文本检测
-            rec: 是否进行文本识别
-            cls: 是否使用方向分类器
-            max_size: 每个分块的最大尺寸
-            overlap: 分块之间的重叠像素
-            memory_limit_mb: 每个分块处理的内存限制（MB）
-        """
-        return self.process_large_image(
-            img, max_size, overlap, det, rec, cls, memory_limit_mb
-        )
-
-
-def sav2Img(
-    org_img, result, name="draw_ocr.jpg", resize_for_vis=False, max_vis_width=1920
-):
-    """
-    将OCR结果可视化并保存到图像
-
-    Args:
-        org_img: 原始图像
-        result: OCR结果
-        name: 输出图像文件名
-        resize_for_vis: 是否调整图像大小以便于可视化
-        max_vis_width: 可视化图像的最大宽度
-    """
-    # 显示结果
-    import os
-
-    from PIL import Image
-
-    # 确保输出目录存在
-    output_dir = os.path.dirname(name)
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir, exist_ok=True)
-
-    result = result[0]
-    # image = Image.open(img_path).convert('RGB')
-    # 图像转BGR2RGB
-    image = org_img[:, :, ::-1]
-    boxes = [line[0] for line in result]
-    txts = [line[1][0] for line in result]
-    scores = [line[1][1] for line in result]
-
-    # 对于大图像，可以选择调整大小以便于可视化
-    im_show = draw_ocr(
-        image,
-        boxes,
-        txts,
-        scores,
-        resize_img_for_vis=resize_for_vis,
-        input_size=max_vis_width,
-    )
-    im_show = Image.fromarray(im_show)
-    im_show.save(name)
-
-
-if __name__ == "__main__":
-    import cv2
-
-    model = ONNXPaddleOcr(use_angle_cls=True, use_gpu=False)
-
-    img = cv2.imread(
-        "/data2/liujingsong3/fiber_box/test/img/20230531230052008263304.jpg"
-    )
-    s = time.time()
-    result = model.ocr(img)
-    e = time.time()
-    print("total time: {:.3f}".format(e - s))
-    print("result:", result)
-    for box in result[0]:
-        print(box)
-
-    sav2Img(img, result)
