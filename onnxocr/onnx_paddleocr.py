@@ -1,13 +1,9 @@
 import argparse
 import gc
-import os
-import sys
-import time
 
 import numpy as np
 
 from .predict_system import TextSystem
-from .utils import draw_ocr, str2bool
 from .utils import infer_args as init_args
 
 
@@ -28,6 +24,41 @@ class ONNXPaddleOcr(TextSystem):
 
         # 初始化模型
         super().__init__(params)
+
+    def ocr(self, img, det=True, rec=True, cls=True):
+        if cls and not self.use_angle_cls:
+            print(
+                "Since the angle classifier is not initialized, the angle classifier will not be uesd during the forward process"
+            )
+
+        if det and rec:
+            ocr_res = []
+            dt_boxes, rec_res = self.__call__(img, cls)
+            tmp_res = [[box.tolist(), res] for box, res in zip(dt_boxes, rec_res)]
+            ocr_res.append(tmp_res)
+            return ocr_res
+        elif det and not rec:
+            ocr_res = []
+            dt_boxes = self.text_detector(img)
+            tmp_res = [box.tolist() for box in dt_boxes]
+            ocr_res.append(tmp_res)
+            return ocr_res
+        else:
+            ocr_res = []
+            cls_res = []
+
+            if not isinstance(img, list):
+                img = [img]
+            if self.use_angle_cls and cls:
+                img, cls_res_tmp = self.text_classifier(img)
+                if not rec:
+                    cls_res.append(cls_res_tmp)
+            rec_res = self.text_recognizer(img)
+            ocr_res.append(rec_res)
+
+            if not rec:
+                return cls_res
+            return ocr_res
 
     def ocr_large_image(
         self,
@@ -143,8 +174,80 @@ class ONNXPaddleOcr(TextSystem):
         # 去除重复检测
         if len(merged_result[0]) > 0:
             merged_result[0] = self._remove_duplicates(merged_result[0])
+            # 按位置排序结果
+            merged_result[0] = self._sort_by_position(merged_result[0])
 
         return merged_result
+
+    def _sort_by_position(self, results, row_threshold=0.5):
+        """
+        按位置对OCR结果进行排序，从上到下，从左到右
+
+        Args:
+            results: OCR结果列表
+            row_threshold: 判断两个框是否在同一行的阈值(框高度的倍数)
+
+        Returns:
+            排序后的结果列表
+        """
+        if len(results) <= 1:
+            return results
+
+        # 提取所有框
+        boxes = [np.array(r[0]) for r in results]
+
+        # 计算每个框的中心点和高度
+        centers = []
+        heights = []
+        for box in boxes:
+            y_min = np.min(box[:, 1])
+            y_max = np.max(box[:, 1])
+            x_min = np.min(box[:, 0])
+            x_max = np.max(box[:, 0])
+
+            center_y = (y_min + y_max) / 2
+            center_x = (x_min + x_max) / 2
+            height = y_max - y_min
+
+            centers.append((center_x, center_y))
+            heights.append(height)
+
+        # 计算平均高度
+        avg_height = sum(heights) / len(heights) if heights else 0
+
+        # 按行分组
+        rows = []
+        processed = [False] * len(results)
+
+        for i in range(len(results)):
+            if processed[i]:
+                continue
+
+            current_row = [i]
+            processed[i] = True
+            current_y = centers[i][1]
+
+            for j in range(len(results)):
+                if processed[j] or i == j:
+                    continue
+
+                # 如果两个框的中心点y坐标差距小于阈值*平均高度，认为它们在同一行
+                if abs(centers[j][1] - current_y) < row_threshold * avg_height:
+                    current_row.append(j)
+                    processed[j] = True
+
+            rows.append(current_row)
+
+        # 按y坐标排序行
+        rows.sort(key=lambda row: centers[row[0]][1])
+
+        # 每行内按x坐标排序
+        sorted_results = []
+        for row in rows:
+            sorted_row = sorted(row, key=lambda i: centers[i][0])
+            sorted_results.extend([results[i] for i in sorted_row])
+
+        return sorted_results
 
     def _remove_duplicates(self, results, iou_threshold=0.5):
         """
@@ -258,38 +361,3 @@ class ONNXPaddleOcr(TextSystem):
         # 简单的相似度计算：共同字符数 / 总字符数
         common_chars = set(text1) & set(text2)
         return len(common_chars) / len(set(text1) | set(text2))
-
-    def ocr(self, img, det=True, rec=True, cls=True):
-        if cls and not self.use_angle_cls:
-            print(
-                "Since the angle classifier is not initialized, the angle classifier will not be uesd during the forward process"
-            )
-
-        if det and rec:
-            ocr_res = []
-            dt_boxes, rec_res = self.__call__(img, cls)
-            tmp_res = [[box.tolist(), res] for box, res in zip(dt_boxes, rec_res)]
-            ocr_res.append(tmp_res)
-            return ocr_res
-        elif det and not rec:
-            ocr_res = []
-            dt_boxes = self.text_detector(img)
-            tmp_res = [box.tolist() for box in dt_boxes]
-            ocr_res.append(tmp_res)
-            return ocr_res
-        else:
-            ocr_res = []
-            cls_res = []
-
-            if not isinstance(img, list):
-                img = [img]
-            if self.use_angle_cls and cls:
-                img, cls_res_tmp = self.text_classifier(img)
-                if not rec:
-                    cls_res.append(cls_res_tmp)
-            rec_res = self.text_recognizer(img)
-            ocr_res.append(rec_res)
-
-            if not rec:
-                return cls_res
-            return ocr_res
