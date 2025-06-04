@@ -1,5 +1,6 @@
 import argparse
 import gc
+import time
 
 import numpy as np
 
@@ -63,8 +64,8 @@ class ONNXPaddleOcr(TextSystem):
     def ocr_large_image(
         self,
         img,
-        max_size=2560,
-        overlap=200,
+        max_size=1920,
+        overlap=100,
         det=True,
         rec=True,
         cls=True,
@@ -173,9 +174,17 @@ class ONNXPaddleOcr(TextSystem):
 
         # 去除重复检测
         if len(merged_result[0]) > 0:
+            # print("去重")
+            # start_time = time.time()
             merged_result[0] = self._remove_duplicates(merged_result[0])
+            # end_time = time.time()
+            # print(f"去重耗时: {end_time - start_time:.2f}秒")
             # 按位置排序结果
+            # print("排序")
+            # start_time = time.time()
             merged_result[0] = self._sort_by_position(merged_result[0])
+            # end_time = time.time()
+            # print(f"排序耗时: {end_time - start_time:.2f}秒")
 
         return merged_result
 

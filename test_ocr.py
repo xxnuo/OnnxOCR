@@ -117,7 +117,7 @@ def main():
 
     # 输出前10个识别结果示例
     print("\n识别结果:")
-    for i, box in enumerate(result[0][: len(result[0])]):
+    for i, box in enumerate(result[0][: min(10, len(result[0]))]):
         print(f"{i + 1}. {box[1][0]} (置信度: {box[1][1]:.2f})")
 
 
