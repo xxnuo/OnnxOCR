@@ -9,7 +9,9 @@ from onnxocr.onnx_paddleocr import ONNXPaddleOcr, draw_ocr
 
 def parse_args():
     parser = argparse.ArgumentParser(description="OCR大图像处理工具")
-    parser.add_argument("--image", type=str, default="./web.png", help="输入图像路径")
+    parser.add_argument(
+        "--image", type=str, default="./test_images/web2.png", help="输入图像路径"
+    )
     parser.add_argument("--max_size", type=int, default=2048, help="每个分块的最大尺寸")
     parser.add_argument("--overlap", type=int, default=200, help="分块之间的重叠像素")
     parser.add_argument("--memory_limit", type=int, default=2048, help="内存限制(MB)")
