@@ -209,6 +209,8 @@ def draw_ocr(
     scores=None,
     drop_score=0.5,
     font_path=font_path_str,
+    resize_img_for_vis=True,
+    input_size=600,
 ):
     """
     Visualize the results of OCR detection and recognition
@@ -219,6 +221,8 @@ def draw_ocr(
         scores(list): txxs corresponding scores
         drop_score(float): only scores greater than drop_threshold will be visualized
         font_path: the path of font which is used to draw text
+        resize_img_for_vis(bool): whether to resize image for visualization
+        input_size(int): the size to resize image when resize_img_for_vis is True
     return(array):
         the visualized img
     """
@@ -231,7 +235,10 @@ def draw_ocr(
         box = np.reshape(np.array(boxes[i]), [-1, 1, 2]).astype(np.int64)
         image = cv2.polylines(np.array(image), [box], True, (255, 0, 0), 2)
     if txts is not None:
-        img = np.array(resize_img(image, input_size=600))
+        if resize_img_for_vis:
+            img = np.array(resize_img(image, input_size=input_size))
+        else:
+            img = np.array(image)
         txt_img = text_visual(
             txts,
             scores,

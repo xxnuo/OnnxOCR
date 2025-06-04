@@ -1,10 +1,14 @@
+import argparse
+import gc
+import os
+import sys
 import time
 
+import numpy as np
+
 from .predict_system import TextSystem
+from .utils import draw_ocr, str2bool
 from .utils import infer_args as init_args
-from .utils import str2bool, draw_ocr
-import argparse
-import sys
 
 
 class ONNXPaddleOcr(TextSystem):
@@ -24,6 +28,236 @@ class ONNXPaddleOcr(TextSystem):
 
         # 初始化模型
         super().__init__(params)
+
+    def process_large_image(
+        self,
+        img,
+        max_size=2560,
+        overlap=200,
+        det=True,
+        rec=True,
+        cls=True,
+        memory_limit_mb=1024,
+    ):
+        """
+        处理超大图像的方法，通过分块处理来避免信息丢失和内存溢出
+
+        Args:
+            img: 输入图像
+            max_size: 每个分块的最大尺寸
+            overlap: 分块之间的重叠像素
+            det: 是否进行文本检测
+            rec: 是否进行文本识别
+            cls: 是否使用方向分类器
+            memory_limit_mb: 每个分块处理的内存限制（MB）
+
+        Returns:
+            合并后的OCR结果
+        """
+        h, w = img.shape[:2]
+
+        # 计算图像大小（以MB为单位）
+        img_size_mb = img.nbytes / (1024 * 1024)
+
+        # 根据内存限制动态调整分块大小
+        if img_size_mb > memory_limit_mb:
+            # 计算缩放比例
+            scale_factor = np.sqrt(memory_limit_mb / img_size_mb)
+            # 调整max_size
+            adjusted_max_size = int(max_size * scale_factor)
+            # 确保max_size不会太小
+            max_size = max(adjusted_max_size, 1024)
+
+        # 如果图像尺寸不大，直接使用原始方法处理
+        if max(h, w) <= max_size:
+            return self.ocr(img, det, rec, cls)
+
+        # 分块处理
+        result_boxes = []
+        result_texts = []
+
+        # 计算需要分成多少块
+        h_blocks = max(1, (h - overlap) // (max_size - overlap) + 1)
+        w_blocks = max(1, (w - overlap) // (max_size - overlap) + 1)
+
+        # 如果只需要一个块，直接处理
+        if h_blocks == 1 and w_blocks == 1:
+            return self.ocr(img, det, rec, cls)
+
+        # 计算每个块的实际大小
+        h_step = (h - overlap) // h_blocks + overlap
+        w_step = (w - overlap) // w_blocks + overlap
+
+        print(
+            f"处理大图像: {h}x{w}，分为 {h_blocks}x{w_blocks} 个块，每块大小约为 {h_step}x{w_step}"
+        )
+
+        total_blocks = h_blocks * w_blocks
+        processed_blocks = 0
+
+        for i in range(h_blocks):
+            for j in range(w_blocks):
+                # 计算当前块的坐标
+                y1 = max(0, i * (h_step - overlap))
+                y2 = min(h, y1 + h_step)
+                x1 = max(0, j * (w_step - overlap))
+                x2 = min(w, x1 + w_step)
+
+                # 提取当前块
+                block = img[y1:y2, x1:x2].copy()  # 使用copy()避免引用原始大图
+
+                processed_blocks += 1
+                print(
+                    f"处理块 {processed_blocks}/{total_blocks}: 坐标 ({x1}, {y1}) 到 ({x2}, {y2}), 大小 {block.shape[1]}x{block.shape[0]}"
+                )
+
+                # 处理当前块
+                block_result = self.ocr(block, det, rec, cls)
+
+                if not block_result or not block_result[0]:
+                    continue
+
+                # 调整坐标到原图
+                for box_info in block_result[0]:
+                    box = box_info[0]
+                    text_info = box_info[1]
+
+                    # 调整坐标
+                    adjusted_box = []
+                    for point in box:
+                        adjusted_box.append([point[0] + x1, point[1] + y1])
+
+                    result_boxes.append(adjusted_box)
+                    result_texts.append(text_info)
+
+                # 释放内存
+                del block
+                gc.collect()
+
+        # 合并结果
+        merged_result = []
+        merged_result.append(
+            [[box, text] for box, text in zip(result_boxes, result_texts)]
+        )
+
+        # 去除重复检测
+        if len(merged_result[0]) > 0:
+            merged_result[0] = self._remove_duplicates(merged_result[0])
+
+        return merged_result
+
+    def _remove_duplicates(self, results, iou_threshold=0.5):
+        """
+        移除重复的检测结果
+
+        Args:
+            results: OCR结果列表
+            iou_threshold: IOU阈值，超过此阈值的框被认为是重复的
+
+        Returns:
+            去重后的结果列表
+        """
+        if len(results) <= 1:
+            return results
+
+        # 提取所有框和对应的文本
+        boxes = [r[0] for r in results]
+        texts = [r[1] for r in results]
+
+        # 计算每个框的面积
+        areas = []
+        for box in boxes:
+            box_np = np.array(box)
+            x_min = np.min(box_np[:, 0])
+            y_min = np.min(box_np[:, 1])
+            x_max = np.max(box_np[:, 0])
+            y_max = np.max(box_np[:, 1])
+            areas.append((x_max - x_min) * (y_max - y_min))
+
+        # 按面积从大到小排序
+        indices = np.argsort(areas)[::-1]
+
+        # 去重
+        keep = []
+        for i in range(len(indices)):
+            idx1 = indices[i]
+            if idx1 < 0:
+                continue
+
+            keep.append(idx1)
+            box1 = np.array(boxes[idx1])
+
+            # 计算box1的边界
+            x1_min = np.min(box1[:, 0])
+            y1_min = np.min(box1[:, 1])
+            x1_max = np.max(box1[:, 0])
+            y1_max = np.max(box1[:, 1])
+
+            for j in range(i + 1, len(indices)):
+                idx2 = indices[j]
+                if idx2 < 0:
+                    continue
+
+                box2 = np.array(boxes[idx2])
+
+                # 计算box2的边界
+                x2_min = np.min(box2[:, 0])
+                y2_min = np.min(box2[:, 1])
+                x2_max = np.max(box2[:, 0])
+                y2_max = np.max(box2[:, 1])
+
+                # 计算交集面积
+                x_overlap = max(0, min(x1_max, x2_max) - max(x1_min, x2_min))
+                y_overlap = max(0, min(y1_max, y2_max) - max(y1_min, y2_min))
+                intersection = x_overlap * y_overlap
+
+                # 计算并集面积
+                area1 = (x1_max - x1_min) * (y1_max - y1_min)
+                area2 = (x2_max - x2_min) * (y2_max - y2_min)
+                union = area1 + area2 - intersection
+
+                # 计算IOU
+                iou = intersection / union if union > 0 else 0
+
+                # 如果IOU大于阈值，并且文本相似度高，则认为是重复的
+                if (
+                    iou > iou_threshold
+                    and self._text_similarity(texts[idx1][0], texts[idx2][0]) > 0.7
+                ):
+                    indices[j] = -1  # 标记为已处理
+
+        # 返回保留的结果
+        return [results[i] for i in keep]
+
+    def _text_similarity(self, text1, text2):
+        """
+        计算两个文本的相似度
+
+        Args:
+            text1: 第一个文本
+            text2: 第二个文本
+
+        Returns:
+            相似度得分，范围[0, 1]
+        """
+        # 如果两个文本完全相同
+        if text1 == text2:
+            return 1.0
+
+        # 如果一个文本是另一个的子串
+        if text1 in text2 or text2 in text1:
+            shorter = min(len(text1), len(text2))
+            longer = max(len(text1), len(text2))
+            return shorter / longer
+
+        # 计算编辑距离
+        len1, len2 = len(text1), len(text2)
+        if len1 == 0 or len2 == 0:
+            return 0.0
+
+        # 简单的相似度计算：共同字符数 / 总字符数
+        common_chars = set(text1) & set(text2)
+        return len(common_chars) / len(set(text1) | set(text2))
 
     def ocr(self, img, det=True, rec=True, cls=True):
         if cls == True and self.use_angle_cls == False:
@@ -60,10 +294,55 @@ class ONNXPaddleOcr(TextSystem):
                 return cls_res
             return ocr_res
 
+    def ocr_large_image(
+        self,
+        img,
+        det=True,
+        rec=True,
+        cls=True,
+        max_size=2560,
+        overlap=200,
+        memory_limit_mb=1024,
+    ):
+        """
+        处理大图像的便捷方法
 
-def sav2Img(org_img, result, name="draw_ocr.jpg"):
+        Args:
+            img: 输入图像
+            det: 是否进行文本检测
+            rec: 是否进行文本识别
+            cls: 是否使用方向分类器
+            max_size: 每个分块的最大尺寸
+            overlap: 分块之间的重叠像素
+            memory_limit_mb: 每个分块处理的内存限制（MB）
+        """
+        return self.process_large_image(
+            img, max_size, overlap, det, rec, cls, memory_limit_mb
+        )
+
+
+def sav2Img(
+    org_img, result, name="draw_ocr.jpg", resize_for_vis=False, max_vis_width=1920
+):
+    """
+    将OCR结果可视化并保存到图像
+
+    Args:
+        org_img: 原始图像
+        result: OCR结果
+        name: 输出图像文件名
+        resize_for_vis: 是否调整图像大小以便于可视化
+        max_vis_width: 可视化图像的最大宽度
+    """
     # 显示结果
+    import os
+
     from PIL import Image
+
+    # 确保输出目录存在
+    output_dir = os.path.dirname(name)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
 
     result = result[0]
     # image = Image.open(img_path).convert('RGB')
@@ -72,7 +351,16 @@ def sav2Img(org_img, result, name="draw_ocr.jpg"):
     boxes = [line[0] for line in result]
     txts = [line[1][0] for line in result]
     scores = [line[1][1] for line in result]
-    im_show = draw_ocr(image, boxes, txts, scores)
+
+    # 对于大图像，可以选择调整大小以便于可视化
+    im_show = draw_ocr(
+        image,
+        boxes,
+        txts,
+        scores,
+        resize_img_for_vis=resize_for_vis,
+        input_size=max_vis_width,
+    )
     im_show = Image.fromarray(im_show)
     im_show.save(name)
 
