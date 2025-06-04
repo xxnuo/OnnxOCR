@@ -94,12 +94,7 @@ def main():
     # 开始处理
     s = time.time()
     # 使用新的大图像处理方法，自动适应图像大小
-    result = model.ocr_large_image(
-        img,
-        max_size=args.max_size,
-        overlap=args.overlap,
-        memory_limit_mb=args.memory_limit,
-    )
+    result = model.ocr_large_image(img)
     e = time.time()
     print("总处理时间: {:.3f}秒".format(e - s))
     print(f"识别出的文本数量: {len(result[0])}")
