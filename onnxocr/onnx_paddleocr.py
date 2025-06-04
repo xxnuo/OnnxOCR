@@ -1,7 +1,7 @@
 import argparse
 import gc
-import time
 
+# import time
 import numpy as np
 
 from .predict_system import TextSystem
