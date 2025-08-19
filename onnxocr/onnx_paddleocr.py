@@ -1,10 +1,11 @@
-import time
+import argparse
+import gc
+
+# import time
+import numpy as np
 
 from .predict_system import TextSystem
 from .utils import infer_args as init_args
-from .utils import str2bool, draw_ocr
-import argparse
-import sys
 
 
 class ONNXPaddleOcr(TextSystem):
@@ -60,37 +61,312 @@ class ONNXPaddleOcr(TextSystem):
                 return cls_res
             return ocr_res
 
+    def ocr_large_image(
+        self,
+        img,
+        max_size=1920,
+        overlap=100,
+        det=True,
+        rec=True,
+        cls=True,
+        memory_limit_mb=1024,
+    ):
+        """
+        处理超大图像的方法，通过分块处理来避免信息丢失和内存溢出
 
-def sav2Img(org_img, result, name="draw_ocr.jpg"):
-    # 显示结果
-    from PIL import Image
+        Args:
+            img: 输入图像
+            max_size: 每个分块的最大尺寸
+            overlap: 分块之间的重叠像素
+            det: 是否进行文本检测
+            rec: 是否进行文本识别
+            cls: 是否使用方向分类器
+            memory_limit_mb: 每个分块处理的内存限制（MB）
 
-    result = result[0]
-    # image = Image.open(img_path).convert('RGB')
-    # 图像转BGR2RGB
-    image = org_img[:, :, ::-1]
-    boxes = [line[0] for line in result]
-    txts = [line[1][0] for line in result]
-    scores = [line[1][1] for line in result]
-    im_show = draw_ocr(image, boxes, txts, scores)
-    im_show = Image.fromarray(im_show)
-    im_show.save(name)
+        Returns:
+            合并后的OCR结果
+        """
+        h, w = img.shape[:2]
 
+        # 计算图像大小（以MB为单位）
+        img_size_mb = img.nbytes / (1024 * 1024)
 
-if __name__ == "__main__":
-    import cv2
+        # 根据内存限制动态调整分块大小
+        if img_size_mb > memory_limit_mb:
+            # 计算缩放比例
+            scale_factor = np.sqrt(memory_limit_mb / img_size_mb)
+            # 调整max_size
+            adjusted_max_size = int(max_size * scale_factor)
+            # 确保max_size不会太小
+            max_size = max(adjusted_max_size, 1024)
 
-    model = ONNXPaddleOcr(use_angle_cls=True, use_gpu=False)
+        # 如果图像尺寸不大，直接使用原始方法处理
+        if max(h, w) <= max_size:
+            return self.ocr(img, det, rec, cls)
 
-    img = cv2.imread(
-        "/data2/liujingsong3/fiber_box/test/img/20230531230052008263304.jpg"
-    )
-    s = time.time()
-    result = model.ocr(img)
-    e = time.time()
-    print("total time: {:.3f}".format(e - s))
-    print("result:", result)
-    for box in result[0]:
-        print(box)
+        # 分块处理
+        result_boxes = []
+        result_texts = []
 
-    sav2Img(img, result)
+        # 计算需要分成多少块
+        h_blocks = max(1, (h - overlap) // (max_size - overlap) + 1)
+        w_blocks = max(1, (w - overlap) // (max_size - overlap) + 1)
+
+        # 如果只需要一个块，直接处理
+        if h_blocks == 1 and w_blocks == 1:
+            return self.ocr(img, det, rec, cls)
+
+        # 计算每个块的实际大小
+        h_step = (h - overlap) // h_blocks + overlap
+        w_step = (w - overlap) // w_blocks + overlap
+
+        # print(
+        #     f"Processing large image: {h}x{w}, divided into {h_blocks}x{w_blocks} blocks, each block size is approximately {h_step}x{w_step}"
+        # )
+
+        total_blocks = h_blocks * w_blocks
+        processed_blocks = 0
+
+        for i in range(h_blocks):
+            for j in range(w_blocks):
+                # 计算当前块的坐标
+                y1 = max(0, i * (h_step - overlap))
+                y2 = min(h, y1 + h_step)
+                x1 = max(0, j * (w_step - overlap))
+                x2 = min(w, x1 + w_step)
+
+                # 提取当前块
+                block = img[y1:y2, x1:x2].copy()  # 使用copy()避免引用原始大图
+
+                processed_blocks += 1
+                # print(
+                #     f"Processing block {processed_blocks}/{total_blocks}: coordinates ({x1}, {y1}) to ({x2}, {y2}), size {block.shape[1]}x{block.shape[0]}"
+                # )
+
+                # 处理当前块
+                block_result = self.ocr(block, det, rec, cls)
+
+                if not block_result or not block_result[0]:
+                    continue
+
+                # 调整坐标到原图
+                for box_info in block_result[0]:
+                    box = box_info[0]
+                    text_info = box_info[1]
+
+                    # 调整坐标
+                    adjusted_box = []
+                    for point in box:
+                        adjusted_box.append([point[0] + x1, point[1] + y1])
+
+                    result_boxes.append(adjusted_box)
+                    result_texts.append(text_info)
+
+                # 释放内存
+                del block
+                gc.collect()
+
+        # 合并结果
+        merged_result = []
+        merged_result.append(
+            [[box, text] for box, text in zip(result_boxes, result_texts)]
+        )
+
+        # 去除重复检测
+        if len(merged_result[0]) > 0:
+            # print("去重")
+            # start_time = time.time()
+            merged_result[0] = self._remove_duplicates(merged_result[0])
+            # end_time = time.time()
+            # print(f"去重耗时: {end_time - start_time:.2f}秒")
+            # 按位置排序结果
+            # print("排序")
+            # start_time = time.time()
+            merged_result[0] = self._sort_by_position(merged_result[0])
+            # end_time = time.time()
+            # print(f"排序耗时: {end_time - start_time:.2f}秒")
+
+        return merged_result
+
+    def _sort_by_position(self, results, row_threshold=0.5):
+        """
+        按位置对OCR结果进行排序，从上到下，从左到右
+
+        Args:
+            results: OCR结果列表
+            row_threshold: 判断两个框是否在同一行的阈值(框高度的倍数)
+
+        Returns:
+            排序后的结果列表
+        """
+        if len(results) <= 1:
+            return results
+
+        # 提取所有框
+        boxes = [np.array(r[0]) for r in results]
+
+        # 计算每个框的中心点和高度
+        centers = []
+        heights = []
+        for box in boxes:
+            y_min = np.min(box[:, 1])
+            y_max = np.max(box[:, 1])
+            x_min = np.min(box[:, 0])
+            x_max = np.max(box[:, 0])
+
+            center_y = (y_min + y_max) / 2
+            center_x = (x_min + x_max) / 2
+            height = y_max - y_min
+
+            centers.append((center_x, center_y))
+            heights.append(height)
+
+        # 计算平均高度
+        avg_height = sum(heights) / len(heights) if heights else 0
+
+        # 按行分组
+        rows = []
+        processed = [False] * len(results)
+
+        for i in range(len(results)):
+            if processed[i]:
+                continue
+
+            current_row = [i]
+            processed[i] = True
+            current_y = centers[i][1]
+
+            for j in range(len(results)):
+                if processed[j] or i == j:
+                    continue
+
+                # 如果两个框的中心点y坐标差距小于阈值*平均高度，认为它们在同一行
+                if abs(centers[j][1] - current_y) < row_threshold * avg_height:
+                    current_row.append(j)
+                    processed[j] = True
+
+            rows.append(current_row)
+
+        # 按y坐标排序行
+        rows.sort(key=lambda row: centers[row[0]][1])
+
+        # 每行内按x坐标排序
+        sorted_results = []
+        for row in rows:
+            sorted_row = sorted(row, key=lambda i: centers[i][0])
+            sorted_results.extend([results[i] for i in sorted_row])
+
+        return sorted_results
+
+    def _remove_duplicates(self, results, iou_threshold=0.5):
+        """
+        移除重复的检测结果
+
+        Args:
+            results: OCR结果列表
+            iou_threshold: IOU阈值，超过此阈值的框被认为是重复的
+
+        Returns:
+            去重后的结果列表
+        """
+        if len(results) <= 1:
+            return results
+
+        # 提取所有框和对应的文本
+        boxes = [r[0] for r in results]
+        texts = [r[1] for r in results]
+
+        # 计算每个框的面积
+        areas = []
+        for box in boxes:
+            box_np = np.array(box)
+            x_min = np.min(box_np[:, 0])
+            y_min = np.min(box_np[:, 1])
+            x_max = np.max(box_np[:, 0])
+            y_max = np.max(box_np[:, 1])
+            areas.append((x_max - x_min) * (y_max - y_min))
+
+        # 按面积从大到小排序
+        indices = np.argsort(areas)[::-1]
+
+        # 去重
+        keep = []
+        for i in range(len(indices)):
+            idx1 = indices[i]
+            if idx1 < 0:
+                continue
+
+            keep.append(idx1)
+            box1 = np.array(boxes[idx1])
+
+            # 计算box1的边界
+            x1_min = np.min(box1[:, 0])
+            y1_min = np.min(box1[:, 1])
+            x1_max = np.max(box1[:, 0])
+            y1_max = np.max(box1[:, 1])
+
+            for j in range(i + 1, len(indices)):
+                idx2 = indices[j]
+                if idx2 < 0:
+                    continue
+
+                box2 = np.array(boxes[idx2])
+
+                # 计算box2的边界
+                x2_min = np.min(box2[:, 0])
+                y2_min = np.min(box2[:, 1])
+                x2_max = np.max(box2[:, 0])
+                y2_max = np.max(box2[:, 1])
+
+                # 计算交集面积
+                x_overlap = max(0, min(x1_max, x2_max) - max(x1_min, x2_min))
+                y_overlap = max(0, min(y1_max, y2_max) - max(y1_min, y2_min))
+                intersection = x_overlap * y_overlap
+
+                # 计算并集面积
+                area1 = (x1_max - x1_min) * (y1_max - y1_min)
+                area2 = (x2_max - x2_min) * (y2_max - y2_min)
+                union = area1 + area2 - intersection
+
+                # 计算IOU
+                iou = intersection / union if union > 0 else 0
+
+                # 如果IOU大于阈值，并且文本相似度高，则认为是重复的
+                if (
+                    iou > iou_threshold
+                    and self._text_similarity(texts[idx1][0], texts[idx2][0]) > 0.7
+                ):
+                    indices[j] = -1  # 标记为已处理
+
+        # 返回保留的结果
+        return [results[i] for i in keep]
+
+    def _text_similarity(self, text1, text2):
+        """
+        计算两个文本的相似度
+
+        Args:
+            text1: 第一个文本
+            text2: 第二个文本
+
+        Returns:
+            相似度得分，范围[0, 1]
+        """
+        # 如果两个文本完全相同
+        if text1 == text2:
+            return 1.0
+
+        # 如果一个文本是另一个的子串
+        if text1 in text2 or text2 in text1:
+            shorter = min(len(text1), len(text2))
+            longer = max(len(text1), len(text2))
+            return shorter / longer
+
+        # 计算编辑距离
+        len1, len2 = len(text1), len(text2)
+        if len1 == 0 or len2 == 0:
+            return 0.0
+
+        # 简单的相似度计算：共同字符数 / 总字符数
+        common_chars = set(text1) & set(text2)
+        return len(common_chars) / len(set(text1) | set(text2))
